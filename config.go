@@ -28,6 +28,7 @@ type configFlags struct {
 	RPCServer           string `long:"rpcserver" short:"s" description:"RPC server to connect to"`
 	AddressesFilePath   string `long:"addresses-file" short:"a" description:"path of file containing our and everybody else's addresses'"`
 	TransactionInterval uint   `long:"transaction-interval" short:"i" description:"Time between transactions (in milliseconds; default:1000)"`
+	SingleOutput        bool   `long:"single-output" description:"Generate transactions with 1 input and 1 output instead of 1 input and 2 outputs"`
 	ActiveNetParams     *dagconfig.Params
 }
 
@@ -50,7 +51,7 @@ func parseConfig() error {
 		return err
 	}
 
-	cfg.ActiveNetParams = &dagconfig.TestnetParams
+	cfg.ActiveNetParams = &dagconfig.MainnetParams
 	if cfg.TransactionInterval == 0 {
 		cfg.TransactionInterval = 1000
 	}

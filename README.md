@@ -22,3 +22,7 @@ $ genkeypair --testnet
   ```bash
   $ go run . -a <PATH_TO_ADDRESSES_FILE> -i=<INTERVAL_SIZE_IN_MILLISECONDS>
   ```
+  To generate transactions with 1 input and 1 output instead of 1 input and 2 outputs, use the `--single-output` flag:
+  ```bash
+  $ go run . -a <PATH_TO_ADDRESSES_FILE> --single-output
+  ```

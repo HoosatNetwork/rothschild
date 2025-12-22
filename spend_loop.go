@@ -140,26 +140,40 @@ var stats struct {
 func maybeSendTransaction(client *rpcclient.RPCClient, addresses *addressesList,
 	availableUTXOs map[appmessage.RPCOutpoint]*appmessage.RPCUTXOEntry) (hasFunds bool, err error) {
 
-	sendAmount := randomizeSpendAmount()
-	totalSendAmount := sendAmount + feeAmount
+	cfg := activeConfig()
+	var selectedUTXOs []*appmessage.UTXOsByAddressesEntry
+	var selectedValue uint64
 
-	selectedUTXOs, selectedValue, err := selectUTXOs(availableUTXOs, totalSendAmount)
-	if err != nil {
-		return false, err
-	}
-
-	if len(selectedUTXOs) == 0 {
-		return false, nil
-	}
-
-	if selectedValue < totalSendAmount {
-		if selectedValue < feeAmount {
+	if cfg.SingleOutput {
+		selectedUTXOs, selectedValue, err = selectSingleUTXO(availableUTXOs, feeAmount+1)
+		if err != nil {
+			return false, err
+		}
+		if len(selectedUTXOs) == 0 {
 			return false, nil
 		}
-		sendAmount = selectedValue - feeAmount
+	} else {
+		const minChange = 100
+		selectedUTXOs, selectedValue, err = selectSingleUTXO(availableUTXOs, feeAmount+minChange)
+		if err != nil {
+			return false, err
+		}
+
+		if len(selectedUTXOs) == 0 {
+			return false, nil
+		}
 	}
 
-	change := selectedValue - sendAmount - feeAmount
+	var change uint64
+	sendAmount := uint64(0)
+	if cfg.SingleOutput {
+		sendAmount = selectedValue - feeAmount
+		change = 0
+	} else {
+		const minChange = 1000
+		sendAmount = selectedValue - feeAmount - minChange
+		change = minChange
+	}
 
 	spendAddress := randomizeSpendAddress(addresses)
 
@@ -331,6 +345,46 @@ func selectUTXOs(
 			log.Infof("Selected %d UTXOs so sending the transaction with %d sompis instead of %d", maxInputs, selectedValue, amountToSend)
 			break
 		}
+	}
+
+	return selectedUTXOs, selectedValue, nil
+}
+
+func selectSingleUTXO(
+	utxos map[appmessage.RPCOutpoint]*appmessage.RPCUTXOEntry,
+	minAmount uint64,
+) (
+	selectedUTXOs []*appmessage.UTXOsByAddressesEntry,
+	selectedValue uint64,
+	err error,
+) {
+	pendingOutpointsMutex.Lock()
+	defer pendingOutpointsMutex.Unlock()
+
+	maxAmount := uint64(0)
+	for outpoint, entry := range utxos {
+		if entry.Amount > maxAmount {
+			maxAmount = entry.Amount
+		}
+		if _, isPending := pendingOutpoints[outpoint]; isPending {
+			continue
+		}
+
+		if entry.Amount >= minAmount {
+			outpointCopy := outpoint
+			selectedUTXOs = []*appmessage.UTXOsByAddressesEntry{
+				{
+					Outpoint:  &outpointCopy,
+					UTXOEntry: entry,
+				},
+			}
+			selectedValue = entry.Amount
+			break
+		}
+	}
+
+	if len(selectedUTXOs) == 0 {
+		log.Infof("No UTXO found with amount >= %d sompi. Max available: %d sompi", minAmount, maxAmount)
 	}
 
 	return selectedUTXOs, selectedValue, nil
