@@ -229,7 +229,7 @@ func fetchSpendableUTXOs(client *rpcclient.RPCClient, address string) (map[appme
 	}
 	log.Infof("Cleared the pending Outpoints")
 	pendingOutpointsMutex.Unlock()
-	getUTXOsByAddressesResponse, err := client.GetUTXOsByAddresses([]string{address})
+	getUTXOsByAddressesResponse, err := client.GetUTXOsByAddresses([]string{address}, 1000)
 	if err != nil {
 		return nil, err
 	}
