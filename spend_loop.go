@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -130,6 +131,8 @@ func checkTransactions(utxosChangedNotificationChan <-chan *appmessage.UTXOsChan
 
 const balanceEpsilon = 10_000         // 10,000 sompi = 0.0001 Hoosat
 const feeAmount = balanceEpsilon * 10 // use high fee amount, because can have a large number of inputs
+const maxInputs = 100
+const maxTxsPerTick = 10
 
 var stats struct {
 	sync.Mutex
@@ -215,7 +218,7 @@ func fetchSpendableUTXOs(client *rpcclient.RPCClient, address string) (map[appme
 	}
 	log.Infof("Cleared the pending Outpoints")
 	pendingOutpointsMutex.Unlock()
-	getUTXOsByAddressesResponse, err := client.GetUTXOsByAddresses([]string{address})
+	getUTXOsByAddressesResponse, err := client.GetUTXOsByAddresses([]string{address}, 1000)
 	if err != nil {
 		return nil, err
 	}
@@ -297,8 +300,10 @@ func randomizeSpendAmount() uint64 {
 
 func selectUTXOs(
 	utxos map[appmessage.RPCOutpoint]*appmessage.RPCUTXOEntry,
+	amountToSend uint64,
 ) (
 	selectedUTXOs []*appmessage.UTXOsByAddressesEntry,
+	selectedValue uint64,
 	err error,
 ) {
 	// Collect all non-pending UTXOs
@@ -319,7 +324,7 @@ func selectUTXOs(
 	pendingOutpointsMutex.Unlock()
 
 	if len(utxoList) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	// Sort by amount descending (largest first)
@@ -333,12 +338,13 @@ func selectUTXOs(
 		n = maxTxsPerTick
 	}
 	selectedUTXOs = make([]*appmessage.UTXOsByAddressesEntry, 0, n)
+	selectedValue = 0
 	for i := 0; i < n; i++ {
 		selectedUTXOs = append(selectedUTXOs, &appmessage.UTXOsByAddressesEntry{
 			Outpoint:  &utxoList[i].outpoint,
 			UTXOEntry: utxoList[i].entry,
 		})
-		selectedValue += entry.Amount
+		selectedValue += utxoList[i].entry.Amount
 
 		if selectedValue >= amountToSend {
 			break
@@ -350,7 +356,7 @@ func selectUTXOs(
 		}
 	}
 
-	return selectedUTXOs, nil
+	return selectedUTXOs, selectedValue, nil
 }
 
 func generateTransaction(keyPair *secp256k1.SchnorrKeyPair, selectedUTXOs []*appmessage.UTXOsByAddressesEntry,
