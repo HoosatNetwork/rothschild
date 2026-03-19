@@ -11,6 +11,7 @@ require (
 
 require (
 	github.com/chewxy/math32 v1.11.1 // indirect
+	github.com/chewxy/math32 v1.11.1 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/jrick/logrotate v1.1.2 // indirect
 	github.com/kaspanet/go-muhash v0.0.4 // indirect

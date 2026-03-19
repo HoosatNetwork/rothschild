@@ -140,40 +140,26 @@ var stats struct {
 func maybeSendTransaction(client *rpcclient.RPCClient, addresses *addressesList,
 	availableUTXOs map[appmessage.RPCOutpoint]*appmessage.RPCUTXOEntry) (hasFunds bool, err error) {
 
-	cfg := activeConfig()
-	var selectedUTXOs []*appmessage.UTXOsByAddressesEntry
-	var selectedValue uint64
+	sendAmount := randomizeSpendAmount()
+	totalSendAmount := sendAmount + feeAmount
 
-	if cfg.SingleOutput {
-		selectedUTXOs, selectedValue, err = selectSingleUTXO(availableUTXOs, feeAmount+1)
-		if err != nil {
-			return false, err
-		}
-		if len(selectedUTXOs) == 0 {
-			return false, nil
-		}
-	} else {
-		const minChange = 100
-		selectedUTXOs, selectedValue, err = selectSingleUTXO(availableUTXOs, feeAmount+minChange)
-		if err != nil {
-			return false, err
-		}
-
-		if len(selectedUTXOs) == 0 {
-			return false, nil
-		}
+	selectedUTXOs, selectedValue, err := selectUTXOs(availableUTXOs, totalSendAmount)
+	if err != nil {
+		return false, err
 	}
 
-	var change uint64
-	sendAmount := uint64(0)
-	if cfg.SingleOutput {
+	if len(selectedUTXOs) == 0 {
+		return false, nil
+	}
+
+	if selectedValue < totalSendAmount {
+		if selectedValue < feeAmount {
+			return false, nil
+		}
 		sendAmount = selectedValue - feeAmount
-		change = 0
-	} else {
-		const minChange = 1000
-		sendAmount = selectedValue - feeAmount - minChange
-		change = minChange
 	}
+
+	change := selectedValue - sendAmount - feeAmount
 
 	spendAddress := randomizeSpendAddress(addresses)
 
@@ -229,7 +215,7 @@ func fetchSpendableUTXOs(client *rpcclient.RPCClient, address string) (map[appme
 	}
 	log.Infof("Cleared the pending Outpoints")
 	pendingOutpointsMutex.Unlock()
-	getUTXOsByAddressesResponse, err := client.GetUTXOsByAddresses([]string{address}, 1000)
+	getUTXOsByAddressesResponse, err := client.GetUTXOsByAddresses([]string{address})
 	if err != nil {
 		return nil, err
 	}
@@ -311,29 +297,46 @@ func randomizeSpendAmount() uint64 {
 
 func selectUTXOs(
 	utxos map[appmessage.RPCOutpoint]*appmessage.RPCUTXOEntry,
-	amountToSend uint64,
 ) (
 	selectedUTXOs []*appmessage.UTXOsByAddressesEntry,
-	selectedValue uint64,
 	err error,
 ) {
-	const maxInputs = 100
-
-	selectedUTXOs = make([]*appmessage.UTXOsByAddressesEntry, 0, maxInputs)
-	selectedValue = 0
-
+	// Collect all non-pending UTXOs
+	type utxoPair struct {
+		outpoint appmessage.RPCOutpoint
+		entry    *appmessage.RPCUTXOEntry
+	}
+	utxoList := make([]utxoPair, 0, len(utxos))
 	pendingOutpointsMutex.Lock()
-	defer pendingOutpointsMutex.Unlock()
-
 	for outpoint, entry := range utxos {
 		if _, isPending := pendingOutpoints[outpoint]; isPending {
 			continue
 		}
+		if entry.Amount >= 2*balanceEpsilon+feeAmount {
+			utxoList = append(utxoList, utxoPair{outpoint, entry})
+		}
+	}
+	pendingOutpointsMutex.Unlock()
 
-		outpointCopy := outpoint
+	if len(utxoList) == 0 {
+		return nil, nil
+	}
+
+	// Sort by amount descending (largest first)
+	sort.Slice(utxoList, func(i, j int) bool {
+		return utxoList[i].entry.Amount > utxoList[j].entry.Amount
+	})
+
+	// Select up to maxTxsPerTick UTXOs
+	n := len(utxoList)
+	if n > maxTxsPerTick {
+		n = maxTxsPerTick
+	}
+	selectedUTXOs = make([]*appmessage.UTXOsByAddressesEntry, 0, n)
+	for i := 0; i < n; i++ {
 		selectedUTXOs = append(selectedUTXOs, &appmessage.UTXOsByAddressesEntry{
-			Outpoint:  &outpointCopy,
-			UTXOEntry: entry,
+			Outpoint:  &utxoList[i].outpoint,
+			UTXOEntry: utxoList[i].entry,
 		})
 		selectedValue += entry.Amount
 
@@ -347,47 +350,7 @@ func selectUTXOs(
 		}
 	}
 
-	return selectedUTXOs, selectedValue, nil
-}
-
-func selectSingleUTXO(
-	utxos map[appmessage.RPCOutpoint]*appmessage.RPCUTXOEntry,
-	minAmount uint64,
-) (
-	selectedUTXOs []*appmessage.UTXOsByAddressesEntry,
-	selectedValue uint64,
-	err error,
-) {
-	pendingOutpointsMutex.Lock()
-	defer pendingOutpointsMutex.Unlock()
-
-	maxAmount := uint64(0)
-	for outpoint, entry := range utxos {
-		if entry.Amount > maxAmount {
-			maxAmount = entry.Amount
-		}
-		if _, isPending := pendingOutpoints[outpoint]; isPending {
-			continue
-		}
-
-		if entry.Amount >= minAmount {
-			outpointCopy := outpoint
-			selectedUTXOs = []*appmessage.UTXOsByAddressesEntry{
-				{
-					Outpoint:  &outpointCopy,
-					UTXOEntry: entry,
-				},
-			}
-			selectedValue = entry.Amount
-			break
-		}
-	}
-
-	if len(selectedUTXOs) == 0 {
-		log.Infof("No UTXO found with amount >= %d sompi. Max available: %d sompi", minAmount, maxAmount)
-	}
-
-	return selectedUTXOs, selectedValue, nil
+	return selectedUTXOs, nil
 }
 
 func generateTransaction(keyPair *secp256k1.SchnorrKeyPair, selectedUTXOs []*appmessage.UTXOsByAddressesEntry,
